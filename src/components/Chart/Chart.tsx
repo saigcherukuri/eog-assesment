@@ -1,120 +1,108 @@
 import React, { useEffect } from 'react';
+import { useDispatch, useSelector } from 'react-redux';
+import { actions } from '../../Feature/Dashboard/reducer';
 import { Provider, createClient, useQuery } from 'urql';
-import { Line } from 'react-chartjs-2';
-import { MatriceTypes, metricQuery, IMatriceTypes } from '../../utils';
-import { IChartProps, IGetMeasurementsResult, IChartData, IMeasurements } from '../types';
+import { IState } from '../../store';
+import LinearProgress from '@material-ui/core/LinearProgress';
+import Cards from '../Cards';
+import {
+    LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend,
+} from 'recharts';
 
-const defaultChartValue: IChartData = {
-  labels: [],
-  datasets: [],
-};
-const MatriceColorList: IMatriceTypes = {
-  flareTemp: '#6600CC',
-  waterTemp: '#608f0c',
-  casingPressure: '#FFC300',
-  tubingPressure: '#FF5733',
-  oilTemp: '#C70039',
-  injValveOpen: '#900C3F',
-};
-const MatriceBorderColor: IMatriceTypes = {
-  flareTemp: '#6600ccaa',
-  waterTemp: '#608f0caa',
-  casingPressure: '#FFC300aa',
-  tubingPressure: '#FF5733aa',
-  oilTemp: '#C70039aa',
-  injValveOpen: '#900C3Faa',
+//Reducer
+const getMeasurementList = (state: IState) => {
+    const { measurements } = state.dashboard;
+    return measurements;
 };
 
-const formatTime = (d: Date | number) => {
-  if (typeof d === 'number') d = new Date(d);
-  const hr = d.getHours();
-  const min = d.getMinutes();
+export default (props: { metricValue: any }) => {
 
-  return `${hr}:${min < 10 ? '0' + min : min}`;
-};
-export interface IMeasurementsMap {
-  [key: string]: IMeasurements;
-}
-export const convertMeasurementsData = (measurements: IMeasurements[]) => {
-  const measurementsMap = measurements.reduce(
-    (a, { at, value }) => {
-      a[formatTime(at)] = { at, value };
-      return a;
-    },
-    {} as IMeasurementsMap,
-  );
-  return Object.values(measurementsMap).sort((a, b) => a.at - b.at);
-};
+     //selector
+    const client = createClient({
+        url: 'https://react.eogresources.com/graphql',
+    });
 
-const { query, url } = metricQuery;
-const maxDataPoints = 200;
-const client = createClient({ url });
+    const query = `
+      query {
+        getMultipleMeasurements
+        (input: 
+            [
+                {metricName: "flareTemp"}, 
+                {metricName: "waterTemp"}, 
+                {metricName: "casingPressure"}, 
+                {metricName: "oilTemp"},
+                {metricName: "tubingPressure"},
+                {metricName: "injValveOpen"}
+            ]) {
+          metric
+          measurements {
+            metric
+            at
+            value
+            unit
+          }
+        }
+      }
+      `
+    const dispatch = useDispatch();
+    const listOfMeasurements = useSelector(getMeasurementList);
+    const finalList = listOfMeasurements.map((x: any) => x.measurements.slice(0, 1000));
 
-const Chart = (props: JSX.IntrinsicAttributes & IChartProps) => (
-  <Provider value={client}>
-    <ChartComp {...props} />
-  </Provider>
-);
+    const [result] = useQuery({
+        query
+    });
 
-const ChartComp = (props: IChartProps) => {
-  const { options } = props;
-  const [fetchedData, setFetchedData] = React.useState(defaultChartValue);
-  const getMeasurements = () => {
-    const after = new Date().getTime() - 30 * 60 * 1000;
-    return { input: options.map(metricName => ({ metricName, after })) };
-  };
-  const [result] = useQuery({
-    query,
-    variables: getMeasurements(),
-  });
-  const { data } = result as IGetMeasurementsResult;
-  useEffect(() => {
-    if (data && data.getMultipleMeasurements) {
-      const { getMultipleMeasurements } = data;
-      const dataValue = getMultipleMeasurements.reduce(
-        (a: IChartData, b) => {
-          let { metric, measurements } = b;
-          measurements = convertMeasurementsData(measurements);
-          measurements = measurements
-            .reverse()
-            .slice(0, maxDataPoints)
-            .reverse();
-          a.labels = measurements.map(({ at: time }) => formatTime(new Date(time)));
-          const backgroundColor = MatriceColorList[metric];
-          const borderColor = MatriceBorderColor[metric];
-          const label = MatriceTypes[metric];
-          a.datasets.push({
-            label,
-            fill: false,
-            lineTension: 0.5,
-            backgroundColor,
-            borderColor,
-            borderWidth: 1,
-            data: measurements.map(({ value }) => value),
-          });
-          return a;
-        },
-        { labels: [], datasets: [] },
-      );
-      setFetchedData(dataValue);
+    //Action
+    const { fetching, data, error } = result;
+    useEffect(() => {
+        if (error) {
+            dispatch(actions.metricDataReceivedApiError({ error: error.message }));
+            return;
+        }
+        if (!data) return;
+        dispatch(actions.measurementsDataReceived(data));
+    }, [dispatch, data, error]);
+
+    if (fetching) return <LinearProgress />;
+
+    let selectiveList: any = [];
+    props && props.metricValue && props.metricValue.length > 0 && props.metricValue.map((element: any) => {
+        let key: any = [];
+        finalList && finalList.map(secondElement => {
+            secondElement.map((thirdElement: any) => {
+                if (thirdElement.metric == element) key.push(thirdElement);
+            })
+        });
+        selectiveList.push(key);
+    });
+
+    const ComponentProps = {
+        metricValue:props.metricValue,
+        selectiveListData: selectiveList
     }
-  }, [data]);
-  return (
-    <Line
-      data={fetchedData}
-      options={{
-        title: {
-          display: true,
-          text: 'Measurements Matricees',
-          fontSize: 20,
-        },
-        legend: {
-          display: true,
-          position: 'right',
-        },
-      }}
-    />
-  );
-};
 
-export default Chart;
+    return (
+        <Provider value={client}>
+            {props.metricValue.length > 0 && <Cards {...ComponentProps}/>}
+
+            <LineChart width={1000} height={400}>
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis dataKey="at" allowDuplicatedCategory={false} />
+                <YAxis dataKey="value" />
+                <Tooltip />
+                <Legend />
+                {selectiveList.map((s: any) => (
+                    <Line 
+                        dataKey="value" 
+                        data={s} 
+                        name={s.metric} 
+                        key={s.metric}
+                        stroke={
+                            "#" + (((1 << 24) * Math.random()) | 0).toString(16)
+                          } />
+                ))}
+            </LineChart>
+        </Provider>
+    );
+
+}
